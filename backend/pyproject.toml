@@ -1,0 +1,14 @@
+[project]
+name = "resu-me-backend"
+version = "0.1.0"
+description = "FastAPI backend for ResuME"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+]
