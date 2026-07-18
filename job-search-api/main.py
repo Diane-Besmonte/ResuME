@@ -1,5 +1,4 @@
 import ipaddress
-import json
 import os
 import socket
 from contextlib import asynccontextmanager
@@ -16,7 +15,6 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jobspy import scrape_jobs
 from jwt import InvalidTokenError
 from pydantic import BaseModel, Field
 from pwdlib import PasswordHash
@@ -29,17 +27,20 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALGORITHM = "HS256"
 TOKEN_HOURS = 24
 
-OUTPUT_DIR = Path("output")
-UPLOAD_DIR = Path("uploads/resumes")
-CAREER_DIR = Path("uploads/career")
-GENERATED_DIR = Path("output/resumes")
+# ponytail: Vercel's /tmp storage is demo-only; use managed DB/blob storage for durable data.
+RUNTIME_DIR = Path("/tmp/resume-api") if os.getenv("VERCEL") else Path(".")
+OUTPUT_DIR = RUNTIME_DIR / "output"
+UPLOAD_DIR = RUNTIME_DIR / "uploads/resumes"
+CAREER_DIR = RUNTIME_DIR / "uploads/career"
+GENERATED_DIR = RUNTIME_DIR / "output/resumes"
 AGENT_URL = os.getenv("AGENT_URL", "http://127.0.0.1:8001").rstrip("/")
 ALLOWED_DOCUMENTS = {"resume", "background", "cover_letter"}
 ALLOWED_SUFFIXES = {".pdf", ".docx"}
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{RUNTIME_DIR / 'app.db'}")
 
 engine = create_engine(
-    "sqlite:///./app.db",
-    connect_args={"check_same_thread": False},
+    DATABASE_URL,
+    connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {},
 )
 password_hash = PasswordHash.recommended()
 bearer = HTTPBearer()
@@ -70,15 +71,6 @@ class RevokedToken(Base):
     jti: Mapped[str] = mapped_column(String(36), primary_key=True)
 
 
-class JobScrape(Base):
-    __tablename__ = "job_scrapes"
-
-    id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    filename: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
-
-
 class ResumeGeneration(Base):
     __tablename__ = "resume_generations"
 
@@ -106,14 +98,6 @@ class AccountPatch(BaseModel):
     portfolio: str | None = None
     background: str | None = None
     cover_letter: str | None = None
-
-
-class ScrapeRequest(BaseModel):
-    search_term: str = Field(min_length=2)
-    location: str = "Remote"
-    results_wanted: int = Field(default=10, ge=1, le=50)
-    country_indeed: str = "USA"
-    hours_old: int | None = Field(default=None, ge=1, le=720)
 
 
 class GenerateResumeRequest(BaseModel):
@@ -307,9 +291,9 @@ def account_data(user: User) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(engine)
-    for directory in [OUTPUT_DIR, UPLOAD_DIR, CAREER_DIR, GENERATED_DIR]:
+    for directory in [RUNTIME_DIR, OUTPUT_DIR, UPLOAD_DIR, CAREER_DIR, GENERATED_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
+    Base.metadata.create_all(engine)
     yield
 
 
@@ -551,72 +535,4 @@ def download_generated_resume(
         GENERATED_DIR / generation.filename,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         filename="tailored-resume.docx",
-    )
-
-
-@app.post("/jobs/scrape", status_code=201)
-def scrape_indeed_jobs(
-    body: ScrapeRequest,
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    try:
-        jobs = scrape_jobs(
-            site_name=["indeed"],  # Indeed only
-            search_term=body.search_term,
-            location=body.location,
-            results_wanted=body.results_wanted,
-            country_indeed=body.country_indeed,
-            hours_old=body.hours_old,
-            verbose=0,
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=502,
-            detail="Indeed is temporarily unavailable or blocked this request.",
-        )
-
-    # Pandas produces JSON-safe nulls and ISO-formatted dates.
-    results = json.loads(jobs.to_json(orient="records", date_format="iso"))
-
-    scrape_id = str(uuid4())
-    filename = f"{scrape_id}.json"
-    (OUTPUT_DIR / filename).write_text(
-        json.dumps(results, indent=2, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
-    session.add(JobScrape(
-        id=scrape_id,
-        user_id=user.id,
-        filename=filename,
-    ))
-    session.commit()
-
-    return {
-        "scrape_id": scrape_id,
-        "count": len(results),
-        "download_url": f"/jobs/scrapes/{scrape_id}",
-    }
-
-
-@app.get("/jobs/scrapes/{scrape_id}")
-def download_scrape(
-    scrape_id: str,
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    scrape = session.scalar(
-        select(JobScrape).where(
-            JobScrape.id == scrape_id,
-            JobScrape.user_id == user.id,
-        )
-    )
-    if not scrape:
-        raise HTTPException(status_code=404, detail="Scrape result not found")
-
-    return FileResponse(
-        OUTPUT_DIR / scrape.filename,
-        media_type="application/json",
-        filename=scrape.filename,
     )

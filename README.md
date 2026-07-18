@@ -65,3 +65,11 @@ cd frontend && npm run build && npm run lint
 ```
 
 Real `.env`, `.env.local`, uploaded documents, generated files, and the runtime SQLite database are ignored by Git.
+
+## Production
+
+- Frontend: https://resume-fe-zeta.vercel.app
+- Backend: https://resume-be-iota.vercel.app
+- Agent: https://resume-agent-pi.vercel.app
+
+Each service is a separate Vercel project rooted at `frontend`, `job-search-api`, and `agent`. The current Vercel backend uses `/tmp` SQLite/file storage for the demo, so data can reset on a cold start. Configure `DATABASE_URL` plus durable object storage before production use.
