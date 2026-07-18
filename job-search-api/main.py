@@ -1,17 +1,26 @@
+import ipaddress
 import json
 import os
+import socket
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
+import httpx
 import jwt
+from docx import Document
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jobspy import scrape_jobs
 from jwt import InvalidTokenError
 from pydantic import BaseModel, Field
 from pwdlib import PasswordHash
+from pypdf import PdfReader
 from sqlalchemy import ForeignKey, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
@@ -22,6 +31,11 @@ TOKEN_HOURS = 24
 
 OUTPUT_DIR = Path("output")
 UPLOAD_DIR = Path("uploads/resumes")
+CAREER_DIR = Path("uploads/career")
+GENERATED_DIR = Path("output/resumes")
+AGENT_URL = os.getenv("AGENT_URL", "http://127.0.0.1:8001").rstrip("/")
+ALLOWED_DOCUMENTS = {"resume", "background", "cover_letter"}
+ALLOWED_SUFFIXES = {".pdf", ".docx"}
 
 engine = create_engine(
     "sqlite:///./app.db",
@@ -62,7 +76,16 @@ class JobScrape(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     filename: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
+
+
+class ResumeGeneration(Base):
+    __tablename__ = "resume_generations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    filename: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(default=lambda: datetime.now(timezone.utc))
 
 
 class RegisterRequest(BaseModel):
@@ -91,6 +114,137 @@ class ScrapeRequest(BaseModel):
     results_wanted: int = Field(default=10, ge=1, le=50)
     country_indeed: str = "USA"
     hours_old: int | None = Field(default=None, ge=1, le=720)
+
+
+class GenerateResumeRequest(BaseModel):
+    job_description: str | None = Field(default=None, max_length=100_000)
+    job_url: str | None = Field(default=None, max_length=1000)
+    title: str = Field(default="", max_length=200)
+    company: str = Field(default="", max_length=200)
+
+
+class VisibleTextParser(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.hidden = 0
+        self.parts: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs):
+        if tag in {"script", "style", "noscript", "svg"}:
+            self.hidden += 1
+
+    def handle_endtag(self, tag: str):
+        if tag in {"script", "style", "noscript", "svg"} and self.hidden:
+            self.hidden -= 1
+
+    def handle_data(self, data: str):
+        text = " ".join(data.split())
+        if not self.hidden and text:
+            self.parts.append(text)
+
+
+def career_document(user_id: int, kind: str) -> Path | None:
+    return next(CAREER_DIR.glob(f"{user_id}-{kind}.*"), None)
+
+
+def extract_document(path: Path) -> str:
+    try:
+        if path.suffix.lower() == ".pdf":
+            text = "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
+        else:
+            text = "\n".join(paragraph.text for paragraph in Document(path).paragraphs)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not read {path.suffix} document") from exc
+    text = text.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Document contains no extractable text")
+    return text[:100_000]
+
+
+def store_document(
+    content: bytes,
+    original_filename: str,
+    kind: str,
+    user: User,
+    session: Session,
+) -> None:
+    suffix = Path(original_filename).suffix.lower()
+    if suffix not in ALLOWED_SUFFIXES:
+        raise HTTPException(status_code=415, detail="Document must be PDF or DOCX")
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Document exceeds 5 MB")
+
+    destination = (
+        UPLOAD_DIR / f"{uuid4()}{suffix}"
+        if kind == "resume"
+        else CAREER_DIR / f"{user.id}-{kind}{suffix}"
+    )
+    temporary = destination.with_name(f".{uuid4()}{suffix}")
+    temporary.write_bytes(content)
+    try:
+        extract_document(temporary)
+    except HTTPException:
+        temporary.unlink(missing_ok=True)
+        raise
+
+    if kind == "resume":
+        if user.resume_filename:
+            (UPLOAD_DIR / user.resume_filename).unlink(missing_ok=True)
+        user.resume_filename = destination.name
+    else:
+        old_file = career_document(user.id, kind)
+        if old_file:
+            old_file.unlink(missing_ok=True)
+    temporary.replace(destination)
+    session.commit()
+
+
+def validate_public_url(url: str) -> None:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username:
+        raise HTTPException(status_code=422, detail="Invalid public job URL")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addresses = socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)
+        public = addresses and all(ipaddress.ip_address(item[4][0]).is_global for item in addresses)
+    except (socket.gaierror, ValueError) as exc:
+        raise HTTPException(status_code=422, detail="Job URL host could not be resolved") from exc
+    if not public:
+        raise HTTPException(status_code=422, detail="Job URL must resolve to a public address")
+
+
+async def scrape_job_url(url: str) -> str:
+    current = url
+    async with httpx.AsyncClient(timeout=15, follow_redirects=False) as client:
+        for _ in range(4):
+            validate_public_url(current)
+            try:
+                async with client.stream("GET", current, headers={"User-Agent": "ResuME/1.0"}) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location:
+                            break
+                        current = urljoin(current, location)
+                        continue
+                    response.raise_for_status()
+                    if "text/html" not in response.headers.get("content-type", ""):
+                        raise HTTPException(status_code=422, detail="Job URL must return HTML")
+                    chunks = []
+                    size = 0
+                    async for chunk in response.aiter_bytes():
+                        size += len(chunk)
+                        if size > 2 * 1024 * 1024:
+                            raise HTTPException(status_code=413, detail="Job page exceeds 2 MB")
+                        chunks.append(chunk)
+                    parser = VisibleTextParser()
+                    parser.feed(b"".join(chunks).decode(response.encoding or "utf-8", errors="replace"))
+                    text = "\n".join(parser.parts)
+                    if len(text) < 50:
+                        raise HTTPException(status_code=422, detail="Could not extract enough job details")
+                    return text[:100_000]
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=502, detail="Could not retrieve job URL") from exc
+    raise HTTPException(status_code=422, detail="Job URL redirected too many times")
 
 
 def get_session():
@@ -135,6 +289,8 @@ def get_current_user(
 
 
 def account_data(user: User) -> dict:
+    background_file = career_document(user.id, "background")
+    cover_letter_file = career_document(user.id, "cover_letter")
     return {
         "name": user.name,
         "email": user.email,
@@ -142,20 +298,38 @@ def account_data(user: User) -> dict:
         "portfolio": user.portfolio,
         "background": user.background,
         "cover_letter": user.cover_letter,
-        "resume_download_url": (
-            "/account/resume" if user.resume_filename else None
-        ),
+        "resume_filename": f"resume{Path(user.resume_filename).suffix}" if user.resume_filename else "",
+        "background_filename": background_file.name if background_file else "",
+        "cover_letter_filename": cover_letter_file.name if cover_letter_file else "",
+        "resume_download_url": "/account/resume" if user.resume_filename else None,
     }
 
 
-app = FastAPI(title="ResuME Job Search API")
-
-
-@app.on_event("startup")
-def startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    for directory in [OUTPUT_DIR, UPLOAD_DIR, CAREER_DIR, GENERATED_DIR]:
+        directory.mkdir(parents=True, exist_ok=True)
+    yield
+
+
+app = FastAPI(title="ResuME API", lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("FRONTEND_ORIGINS", "").split(",") if os.getenv("FRONTEND_ORIGINS") else [],
+    allow_origin_regex=os.getenv(
+        "FRONTEND_ORIGIN_REGEX",
+        r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    ),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
 
 
 @app.post("/auth/register", status_code=201)
@@ -237,25 +411,28 @@ def update_account(
     return account_data(user)
 
 
+@app.post("/account/documents/{kind}")
+async def upload_document(
+    kind: str,
+    document: UploadFile = File(...),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if kind not in ALLOWED_DOCUMENTS:
+        raise HTTPException(status_code=404, detail="Unknown document type")
+    content = await document.read()
+    store_document(content, document.filename or "", kind, user, session)
+    return account_data(user)
+
+
 @app.post("/account/resume")
 async def upload_resume(
     resume: UploadFile = File(...),
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
 ):
-    if resume.content_type != "application/pdf":
-        raise HTTPException(status_code=415, detail="Resume must be a PDF")
-
     content = await resume.read()
-    if len(content) > 5 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail="Resume exceeds 5 MB")
-
-    filename = f"{uuid4()}.pdf"
-    (UPLOAD_DIR / filename).write_bytes(content)
-
-    user.resume_filename = filename
-    session.commit()
-
+    store_document(content, resume.filename or "", "resume", user, session)
     return {"message": "Resume uploaded", "resume_download_url": "/account/resume"}
 
 
@@ -263,11 +440,117 @@ async def upload_resume(
 def download_resume(user: User = Depends(get_current_user)):
     if not user.resume_filename:
         raise HTTPException(status_code=404, detail="No resume uploaded")
+    path = UPLOAD_DIR / user.resume_filename
+    media_type = (
+        "application/pdf"
+        if path.suffix == ".pdf"
+        else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    )
+    return FileResponse(path, media_type=media_type, filename=f"resume{path.suffix}")
 
+
+@app.post("/resume-generations")
+async def generate_resume(
+    body: GenerateResumeRequest,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    description = (body.job_description or "").strip()
+    job_url = (body.job_url or "").strip()
+    if bool(description) == bool(job_url):
+        raise HTTPException(status_code=422, detail="Provide either job_description or job_url")
+    if job_url:
+        description = await scrape_job_url(job_url)
+    elif len(description) < 50:
+        raise HTTPException(status_code=422, detail="Job description is too short")
+
+    resume_path = UPLOAD_DIR / user.resume_filename if user.resume_filename else None
+    background_path = career_document(user.id, "background")
+    cover_letter_path = career_document(user.id, "cover_letter")
+    portfolio_text = ""
+    if user.portfolio:
+        try:
+            portfolio_text = await scrape_job_url(user.portfolio)
+        except HTTPException:
+            pass  # A blocked portfolio should not prevent generation from other evidence.
+    resume_text = extract_document(resume_path) if resume_path and resume_path.is_file() else ""
+    background_text = extract_document(background_path) if background_path else user.background or ""
+    cover_letter_text = (
+        extract_document(cover_letter_path) if cover_letter_path else user.cover_letter or ""
+    )
+    if not any([resume_text, background_text, cover_letter_text, portfolio_text, user.github_repo]):
+        raise HTTPException(status_code=422, detail="Add a resume, background document, portfolio, or GitHub repository first")
+
+    payload = {
+        "profile": {
+            "name": user.name,
+            "email": user.email,
+            "github_repo": user.github_repo or "",
+            "portfolio": user.portfolio or "",
+            "portfolio_text": portfolio_text,
+            "resume_text": resume_text,
+            "background_text": background_text,
+            "cover_letter_text": cover_letter_text,
+        },
+        "job": {
+            "title": body.title,
+            "company": body.company,
+            "description": description,
+            "source_url": job_url,
+        },
+    }
+
+    agent_key = os.getenv("AGENT_API_KEY")
+    if not agent_key:
+        raise HTTPException(status_code=503, detail="Agent service is not configured")
+    headers = {"Authorization": f"Bearer {agent_key}"}
+    try:
+        async with httpx.AsyncClient(timeout=180) as client:
+            response = await client.post(f"{AGENT_URL}/resume-generations", json=payload, headers=headers)
+            if not response.is_success:
+                detail = response.json().get("detail", "Agent service failed")
+                raise HTTPException(status_code=502, detail=detail)
+            result = response.json()
+            document_response = await client.get(f"{AGENT_URL}{result['docx_url']}", headers=headers)
+            document_response.raise_for_status()
+    except httpx.ConnectError as exc:
+        raise HTTPException(status_code=503, detail=f"Agent service is not running at {AGENT_URL}") from exc
+    except httpx.TimeoutException as exc:
+        raise HTTPException(status_code=504, detail="Agent service timed out") from exc
+    except (httpx.HTTPError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail="Agent service failed") from exc
+
+    if len(document_response.content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=502, detail="Generated document is too large")
+    generation_id = str(uuid4())
+    filename = f"{generation_id}.docx"
+    (GENERATED_DIR / filename).write_bytes(document_response.content)
+    session.add(ResumeGeneration(id=generation_id, user_id=user.id, filename=filename))
+    session.commit()
+
+    result["id"] = generation_id
+    result["docx_url"] = f"/resume-generations/{generation_id}/resume.docx"
+    return result
+
+
+@app.get("/resume-generations/{generation_id}/resume.docx")
+def download_generated_resume(
+    generation_id: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    generation = session.scalar(
+        select(ResumeGeneration).where(
+            ResumeGeneration.id == generation_id,
+            ResumeGeneration.user_id == user.id,
+        )
+    )
+    if not generation:
+        raise HTTPException(status_code=404, detail="Generated resume not found")
     return FileResponse(
-        UPLOAD_DIR / user.resume_filename,
-        media_type="application/pdf",
-        filename="resume.pdf",
+        GENERATED_DIR / generation.filename,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename="tailored-resume.docx",
     )
 
 

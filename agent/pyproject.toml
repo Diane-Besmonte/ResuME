@@ -1,0 +1,17 @@
+[project]
+name = "resu-me-agent"
+version = "0.1.0"
+description = "Grounded resume tailoring agent for ResuME"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi[standard]>=0.115.0",
+    "httpx>=0.28.0",
+    "openai-agents>=0.2.0",
+    "python-docx>=1.1.2",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]

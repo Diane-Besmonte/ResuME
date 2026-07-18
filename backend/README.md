@@ -1,12 +1,13 @@
-# ResuME Backend
+# Legacy Backend Scaffold
 
-FastAPI backend managed with `uv`.
+This directory is the original FastAPI scaffold and is not used by the connected ResuME application.
 
-## Setup
+Run the active backend from `../job-search-api` instead:
 
 ```sh
+cd ../job-search-api
 uv sync
-uv run fastapi dev app/main.py
+uv run uvicorn main:app --reload --port 8002 --env-file .env
 ```
 
-The API will be available at `http://127.0.0.1:8000`.
+See `../README.md` for the complete three-terminal setup.

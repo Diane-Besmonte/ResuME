@@ -1,4 +1,6 @@
+app.db
 output/
+uploads/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
