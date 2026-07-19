@@ -4,7 +4,8 @@ import re
 from urllib.parse import quote, urlparse
 
 import httpx
-from agents import Agent, Runner
+from agents import Agent, OpenAIChatCompletionsModel, Runner
+from openai import AsyncOpenAI
 
 from .models import GenerationRequest, ResumeDraft
 
@@ -101,15 +102,22 @@ def candidate_evidence(request: GenerationRequest) -> dict[str, str]:
 
 
 async def tailor_resume(request: GenerationRequest) -> ResumeDraft:
+    api_key = request.openai_api_key or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OpenAI API key is not configured")
+    client = AsyncOpenAI(api_key=api_key)
     agent = Agent(
         name="ResuME Resume Tailor",
         instructions=SYSTEM_PROMPT,
-        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        model=OpenAIChatCompletionsModel(model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"), openai_client=client),
         output_type=ResumeDraft,
     )
     payload = {
         "CANDIDATE_EVIDENCE": candidate_evidence(request),
         "JOB_DETAILS": request.job.model_dump(),
     }
-    result = await Runner.run(agent, json.dumps(payload, ensure_ascii=False))
-    return result.final_output
+    try:
+        result = await Runner.run(agent, json.dumps(payload, ensure_ascii=False))
+        return result.final_output
+    finally:
+        await client.close()

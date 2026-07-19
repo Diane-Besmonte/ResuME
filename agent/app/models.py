@@ -28,6 +28,7 @@ class JobDetails(BaseModel):
 class GenerationRequest(BaseModel):
     profile: CandidateProfile
     job: JobDetails
+    openai_api_key: str = Field(default="", max_length=500)
 
 
 class RequirementMatch(BaseModel):

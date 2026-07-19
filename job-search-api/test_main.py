@@ -86,7 +86,7 @@ def test_authenticated_generation_flow(tmp_path: Path, monkeypatch):
     response = client.post(
         "/resume-generations",
         headers=headers,
-        json={"job_description": "Seeking a Python and FastAPI engineer to build reliable web services for our growing product team."},
+        json={"job_description": "Seeking a Python and FastAPI engineer to build reliable web services for our growing product team.", "openai_api_key": "test-openai-key"},
     )
     assert response.status_code == 200
     download = client.get(response.json()["docx_url"], headers=headers)

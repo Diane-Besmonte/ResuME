@@ -109,6 +109,7 @@ class GenerateResumeRequest(BaseModel):
     job_url: str | None = Field(default=None, max_length=1000)
     title: str = Field(default="", max_length=200)
     company: str = Field(default="", max_length=200)
+    openai_api_key: str = Field(default="", max_length=500)
 
 
 class VisibleTextParser(HTMLParser):
@@ -575,10 +576,12 @@ async def generate_resume(
     agent_key = os.getenv("AGENT_API_KEY")
     if not agent_key:
         raise HTTPException(status_code=503, detail="Agent service is not configured")
+    if not body.openai_api_key.strip() and not os.getenv("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OpenAI is not configured. Add an API key in Account Settings.")
     headers = {"Authorization": f"Bearer {agent_key}"}
     try:
         async with httpx.AsyncClient(timeout=180) as client:
-            response = await client.post(f"{AGENT_URL}/resume-generations", json=payload, headers=headers)
+            response = await client.post(f"{AGENT_URL}/resume-generations", json={**payload, "openai_api_key": body.openai_api_key}, headers=headers)
             if not response.is_success:
                 detail = response.json().get("detail", "Agent service failed")
                 raise HTTPException(status_code=502, detail=detail)
