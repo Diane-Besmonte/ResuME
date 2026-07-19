@@ -21,3 +21,11 @@ button, a { -webkit-tap-highlight-color: transparent; }
 }
 
 .auth-form-swap { animation: auth-form-swap 220ms ease-out; }
+
+@keyframes provider-prompt {
+  from { opacity: 0; transform: scale(.98) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.provider-prompt > div { animation: provider-prompt 220ms ease-out; }
+.page-transition { animation: auth-form-swap 220ms ease-out; }
