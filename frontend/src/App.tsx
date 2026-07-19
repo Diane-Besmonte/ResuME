@@ -9,6 +9,7 @@ type Profile = {
   name: string
   email: string
   github: string
+  githubConnected: boolean
   portfolio: string
   resume: string
   background: string
@@ -21,6 +22,7 @@ type AccountResponse = {
   github_repo?: string
   portfolio?: string
   resume_filename?: string
+  github_connected?: boolean
   background_filename?: string
   cover_letter_filename?: string
 }
@@ -31,7 +33,7 @@ type GenerationResult = {
 }
 
 const defaultProfile: Profile = {
-  name: '', email: '', github: '', portfolio: '', resume: '', background: '', coverLetter: '',
+  name: '', email: '', github: '', githubConnected: false, portfolio: '', resume: '', background: '', coverLetter: '',
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
@@ -53,6 +55,7 @@ const toProfile = (account: AccountResponse): Profile => ({
   name: account.name,
   email: account.email,
   github: account.github_repo || '',
+  githubConnected: Boolean(account.github_connected),
   portfolio: account.portfolio || '',
   resume: account.resume_filename || '',
   background: account.background_filename || '',
@@ -178,7 +181,7 @@ function FileDropzone({ label, value, onChange }: { label: string; value: string
   return <div><p className="mb-2 text-xs font-bold text-[#575b70]">{label}</p><input ref={inputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={event => acceptFile(event.target.files?.[0])} />{value ? <div className="flex items-center justify-between rounded-xl border border-[#d9e9e2] bg-[#f5fcf8] px-4 py-3"><div className="flex min-w-0 items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-[#39a779]"><FileIcon /></span><span className="truncate text-sm font-semibold text-[#286a4e]">{value}</span></div><button type="button" onClick={() => inputRef.current?.click()} className="text-xs font-bold text-[#7d9c8d] hover:text-[#286a4e]">Replace</button></div> : <button type="button" onClick={() => inputRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); acceptFile(event.dataTransfer.files[0]) }} className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-[#cfd3e2] bg-[#fafbfe] px-5 py-7 text-center transition hover:border-[#4b5ce1] hover:bg-[#f7f8ff]"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><UploadIcon /></span><span className="mt-3 text-sm font-bold text-[#4b5ce1]">Drop a file here or browse</span><span className="mt-1 text-xs text-[#9296a7]">PDF or DOCX, up to 5 MB</span></button>}</div>
 }
 
-function SettingsPage({ profile, onSave }: { profile: Profile; onSave: (profile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => Promise<Profile> }) {
+function SettingsPage({ profile, onSave, onConnect }: { profile: Profile; onSave: (profile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => Promise<Profile>; onConnect: () => Promise<void> }) {
   const [draft, setDraft] = useState(profile)
   const [files, setFiles] = useState<Partial<Record<'resume' | 'background' | 'coverLetter', File>>>({})
   const [toast, setToast] = useState('')
@@ -191,7 +194,7 @@ function SettingsPage({ profile, onSave }: { profile: Profile; onSave: (profile:
     event.preventDefault(); setSaving(true); setError('')
     try { setDraft(await onSave(draft, files)); setFiles({}); setToast('Account settings saved') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save settings') } finally { setSaving(false) }
   }
-  return <main className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div><p className="text-sm font-semibold text-[#85899c]">Your account</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b]">Account Settings</h1><p className="mt-3 text-sm leading-6 text-[#777b8d]">Keep your profile and career documents ready for every application.</p></div><form onSubmit={save} className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="grid gap-5 sm:grid-cols-2"><label className="text-xs font-bold text-[#575b70]">Name<input required value={draft.name} onChange={event => update('name', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Email address<input required type="email" value={draft.email} onChange={event => update('email', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">GitHub repository<input value={draft.github} onChange={event => update('github', event.target.value)} placeholder="https://github.com/you/project" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Portfolio<input value={draft.portfolio} onChange={event => update('portfolio', event.target.value)} placeholder="https://yourportfolio.com" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label></div><div className="my-8 border-t border-[#eceef5]" /><div><h2 className="text-base font-bold text-[#282c43]">Career documents</h2><p className="mt-1 text-sm text-[#85899c]">Upload the latest materials you want ResuME to use.</p></div><div className="mt-6 space-y-5"><FileDropzone label="Recent resume" value={draft.resume} onChange={file => selectFile('resume', file)} /><FileDropzone label="Background document" value={draft.background} onChange={file => selectFile('background', file)} /><FileDropzone label="Cover letter (optional)" value={draft.coverLetter} onChange={file => selectFile('coverLetter', file)} /></div>{error && <p className="mt-5 text-sm font-semibold text-red-600">{error}</p>}<div className="mt-8 flex justify-end border-t border-[#eceef5] pt-6"><button disabled={saving} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:opacity-60">{saving ? 'Saving…' : 'Save changes'}</button></div></form>{toast && <Toast message={toast} onDismiss={() => setToast('')} />}</main>
+  return <main className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div><p className="text-sm font-semibold text-[#85899c]">Your account</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b]">Account Settings</h1><p className="mt-3 text-sm leading-6 text-[#777b8d]">Keep your profile and career documents ready for every application.</p></div><form onSubmit={save} className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="grid gap-5 sm:grid-cols-2"><label className="text-xs font-bold text-[#575b70]">Name<input required value={draft.name} onChange={event => update('name', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Email address<input required type="email" value={draft.email} onChange={event => update('email', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">GitHub repository<input value={draft.github} onChange={event => update('github', event.target.value)} placeholder="https://github.com/you/project" disabled={profile.githubConnected} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /><button type="button" onClick={onConnect} disabled={profile.githubConnected} className="mt-2 rounded-lg bg-[#202124] px-3 py-2 text-xs font-semibold text-white disabled:opacity-60">{profile.githubConnected ? 'GitHub connected' : 'Connect GitHub'}</button></label><label className="text-xs font-bold text-[#575b70]">Portfolio<input value={draft.portfolio} onChange={event => update('portfolio', event.target.value)} placeholder="https://yourportfolio.com" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label></div><div className="my-8 border-t border-[#eceef5]" /><div><h2 className="text-base font-bold text-[#282c43]">Career documents</h2><p className="mt-1 text-sm text-[#85899c]">Upload the latest materials you want ResuME to use.</p></div><div className="mt-6 space-y-5"><FileDropzone label="Recent resume" value={draft.resume} onChange={file => selectFile('resume', file)} /><FileDropzone label="Background document" value={draft.background} onChange={file => selectFile('background', file)} /><FileDropzone label="Cover letter (optional)" value={draft.coverLetter} onChange={file => selectFile('coverLetter', file)} /></div>{error && <p className="mt-5 text-sm font-semibold text-red-600">{error}</p>}<div className="mt-8 flex justify-end border-t border-[#eceef5] pt-6"><button disabled={saving} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:opacity-60">{saving ? 'Saving…' : 'Save changes'}</button></div></form>{toast && <Toast message={toast} onDismiss={() => setToast('')} />}</main>
 }
 
 function AuthenticatedApp({ onSignOut }: { onSignOut: () => void }) {
@@ -199,6 +202,10 @@ function AuthenticatedApp({ onSignOut }: { onSignOut: () => void }) {
   const [profile, setProfile] = useState<Profile>(defaultProfile)
   const [loading, setLoading] = useState(true)
   useEffect(() => { api('/account').then(account => setProfile(toProfile(account))).catch(onSignOut).finally(() => setLoading(false)) }, [onSignOut])
+  const connectGithub = async () => {
+    const response = await api('/auth/github/start')
+    window.location.href = response.url
+  }
   const saveProfile = async (nextProfile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => {
     let account: AccountResponse = await api('/account', { method: 'PATCH', body: JSON.stringify({ name: nextProfile.name, email: nextProfile.email, github_repo: nextProfile.github || null, portfolio: nextProfile.portfolio || null }) })
     for (const [key, file] of Object.entries(files)) {
@@ -210,7 +217,7 @@ function AuthenticatedApp({ onSignOut }: { onSignOut: () => void }) {
     const saved = toProfile(account); setProfile(saved); return saved
   }
   if (loading) return <main className="grid min-h-screen place-items-center bg-[#f7f8fc] text-sm font-semibold text-[#777b8d]">Loading your profile…</main>
-  return <div className="min-h-screen bg-[#f7f8fc] text-[#171a2c] lg:flex"><Sidebar page={page} onPageChange={setPage} onSignOut={onSignOut} profile={profile} /><div className="min-w-0 flex-1">{page === 'dashboard' ? <Dashboard profile={profile} /> : <SettingsPage profile={profile} onSave={saveProfile} />}</div></div>
+  return <div className="min-h-screen bg-[#f7f8fc] text-[#171a2c] lg:flex"><Sidebar page={page} onPageChange={setPage} onSignOut={onSignOut} profile={profile} /><div className="min-w-0 flex-1">{page === 'dashboard' ? <Dashboard profile={profile} /> : <SettingsPage profile={profile} onSave={saveProfile} onConnect={connectGithub} />}</div></div>
 }
 
 function App() {

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlencode, urljoin, urlparse
 from uuid import uuid4
 
 import httpx
@@ -13,13 +13,13 @@ import jwt
 from docx import Document
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import InvalidTokenError
 from pydantic import BaseModel, Field
 from pwdlib import PasswordHash
 from pypdf import PdfReader
-from sqlalchemy import ForeignKey, String, create_engine, select
+from sqlalchemy import ForeignKey, String, Text, create_engine, inspect, select, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 
@@ -34,6 +34,8 @@ UPLOAD_DIR = RUNTIME_DIR / "uploads/resumes"
 CAREER_DIR = RUNTIME_DIR / "uploads/career"
 GENERATED_DIR = RUNTIME_DIR / "output/resumes"
 AGENT_URL = os.getenv("AGENT_URL", "http://127.0.0.1:8001").rstrip("/")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173").rstrip("/")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8002").rstrip("/")
 ALLOWED_DOCUMENTS = {"resume", "background", "cover_letter"}
 ALLOWED_SUFFIXES = {".pdf", ".docx"}
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{RUNTIME_DIR / 'app.db'}")
@@ -63,6 +65,8 @@ class User(Base):
     background: Mapped[str | None] = mapped_column(nullable=True)
     cover_letter: Mapped[str | None] = mapped_column(nullable=True)
     resume_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    github_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RevokedToken(Base):
@@ -286,6 +290,8 @@ def account_data(user: User) -> dict:
         "background_filename": background_file.name if background_file else "",
         "cover_letter_filename": cover_letter_file.name if cover_letter_file else "",
         "resume_download_url": "/account/resume" if user.resume_filename else None,
+        "github_username": user.github_username,
+        "github_connected": bool(user.github_username),
     }
 
 
@@ -294,6 +300,12 @@ async def lifespan(app: FastAPI):
     for directory in [RUNTIME_DIR, OUTPUT_DIR, UPLOAD_DIR, CAREER_DIR, GENERATED_DIR]:
         directory.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine)
+    # Keep the demo SQLite database usable after adding GitHub integration.
+    columns = {column["name"] for column in inspect(engine).get_columns("users")}
+    with engine.begin() as connection:
+        for column, definition in [("github_username", "VARCHAR(255)"), ("github_evidence", "TEXT")]:
+            if column not in columns:
+                connection.execute(text(f"ALTER TABLE users ADD COLUMN {column} {definition}"))
     yield
 
 
@@ -337,6 +349,81 @@ def register(body: RegisterRequest, session: Session = Depends(get_session)):
         "token_type": "bearer",
         "account": account_data(user),
     }
+
+
+@app.get("/auth/github/start")
+def github_start(user: User = Depends(get_current_user)):
+    client_id = os.getenv("GITHUB_CLIENT_ID")
+    if not client_id:
+        raise HTTPException(status_code=503, detail="GITHUB_CLIENT_ID is not configured")
+    state = jwt.encode(
+        {"sub": str(user.id), "purpose": "github", "exp": datetime.now(timezone.utc) + timedelta(minutes=10)},
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    callback = f"{BACKEND_URL}/auth/github/callback"
+    params = urlencode({"client_id": client_id, "redirect_uri": callback, "scope": "read:user user:email", "state": state})
+    return {"url": f"https://github.com/login/oauth/authorize?{params}"}
+
+
+async def fetch_github_evidence(access_token: str, username: str) -> str:
+    headers = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {access_token}", "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "resu-me"}
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.get(f"https://api.github.com/users/{username}/repos", headers=headers, params={"type": "owner", "sort": "updated", "per_page": 10})
+        response.raise_for_status()
+        repositories = response.json()
+        evidence = []
+        for repository in repositories[:10]:
+            readme_response = await client.get(f"https://api.github.com/repos/{repository['full_name']}/readme", headers={**headers, "Accept": "application/vnd.github.raw+json"})
+            readme = readme_response.text[:5_000] if readme_response.is_success else ""
+            evidence.append({"repository": repository["full_name"], "url": repository.get("html_url", ""), "description": repository.get("description") or "", "topics": repository.get("topics", []), "languages_url": repository.get("languages_url", ""), "readme": readme})
+    return str(evidence)[:50_000]
+
+
+@app.get("/auth/github/callback")
+async def github_callback(code: str, state: str):
+    try:
+        claims = jwt.decode(state, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if claims.get("purpose") != "github":
+            raise ValueError
+        user_id = int(claims["sub"])
+    except (InvalidTokenError, KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Invalid GitHub OAuth state") from exc
+
+    client_id, client_secret = os.getenv("GITHUB_CLIENT_ID"), os.getenv("GITHUB_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        raise HTTPException(status_code=503, detail="GitHub OAuth is not configured")
+    async with httpx.AsyncClient(timeout=15) as client:
+        token_response = await client.post("https://github.com/login/oauth/access_token", headers={"Accept": "application/json"}, data={"client_id": client_id, "client_secret": client_secret, "code": code})
+        token_response.raise_for_status()
+        access_token = token_response.json().get("access_token")
+        if not access_token:
+            raise HTTPException(status_code=502, detail="GitHub did not return an access token")
+        user_response = await client.get("https://api.github.com/user", headers={"Authorization": f"Bearer {access_token}", "User-Agent": "resu-me"})
+        user_response.raise_for_status()
+        github_user = user_response.json()
+
+    try:
+        evidence = await fetch_github_evidence(access_token, github_user["login"])
+    except (httpx.HTTPError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=502, detail="Could not read GitHub repositories") from exc
+    with Session(engine) as session:
+        user = session.get(User, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        user.github_username = github_user["login"]
+        user.github_repo = f"https://github.com/{github_user['login']}"
+        user.github_evidence = evidence
+        session.commit()
+    return RedirectResponse(f"{FRONTEND_URL}/?github=connected")
+
+
+@app.post("/auth/github/disconnect", status_code=204)
+def github_disconnect(user: User = Depends(get_current_user), session: Session = Depends(get_session)):
+    user.github_username = None
+    user.github_repo = None
+    user.github_evidence = None
+    session.commit()
 
 
 @app.post("/auth/sign-in")
@@ -462,7 +549,7 @@ async def generate_resume(
     cover_letter_text = (
         extract_document(cover_letter_path) if cover_letter_path else user.cover_letter or ""
     )
-    if not any([resume_text, background_text, cover_letter_text, portfolio_text, user.github_repo]):
+    if not any([resume_text, background_text, cover_letter_text, portfolio_text, user.github_repo, user.github_evidence]):
         raise HTTPException(status_code=422, detail="Add a resume, background document, portfolio, or GitHub repository first")
 
     payload = {
@@ -470,6 +557,7 @@ async def generate_resume(
             "name": user.name,
             "email": user.email,
             "github_repo": user.github_repo or "",
+            "github_evidence": user.github_evidence or "",
             "portfolio": user.portfolio or "",
             "portfolio_text": portfolio_text,
             "resume_text": resume_text,

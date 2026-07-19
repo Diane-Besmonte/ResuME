@@ -96,7 +96,7 @@ def candidate_evidence(request: GenerationRequest) -> dict[str, str]:
         "background_document": _clip(profile.background_text),
         "cover_letter": _clip(profile.cover_letter_text),
         "portfolio_content": _clip(profile.portfolio_text),
-        "public_github": github_evidence(profile.github_repo),
+        "public_github": _clip(profile.github_evidence) or github_evidence(profile.github_repo),
     }
 
 
