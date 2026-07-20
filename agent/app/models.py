@@ -9,6 +9,7 @@ class CandidateProfile(BaseModel):
     phone: str = Field(default="", max_length=50)
     location: str = Field(default="", max_length=120)
     github_repo: str = Field(default="", max_length=500)
+    github_evidence: str = Field(default="", max_length=100_000)
     portfolio: str = Field(default="", max_length=500)
     linkedin: str = Field(default="", max_length=500)
     resume_text: str = Field(default="", max_length=100_000)
@@ -27,6 +28,7 @@ class JobDetails(BaseModel):
 class GenerationRequest(BaseModel):
     profile: CandidateProfile
     job: JobDetails
+    openai_api_key: str = Field(default="", max_length=500)
 
 
 class RequirementMatch(BaseModel):

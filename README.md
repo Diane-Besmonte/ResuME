@@ -39,6 +39,8 @@ uv run uvicorn main:app --reload --port 8002 --env-file .env
 
 Backend docs: http://127.0.0.1:8002/docs
 
+For GitHub connection, create an OAuth App with callback URL `http://127.0.0.1:8002/auth/github/callback`, then set `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` in `job-search-api/.env`. The app reads public repositories and passes bounded evidence to the agent.
+
 ### 3. Frontend — port 5173
 
 ```sh

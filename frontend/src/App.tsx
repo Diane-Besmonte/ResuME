@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 
 type AuthMode = 'signin' | 'signup'
 type AppView = 'landing' | 'auth' | 'app'
-type AppPage = 'dashboard' | 'settings'
+type AppPage = 'dashboard' | 'provider' | 'settings'
 type JobInputMode = 'url' | 'description'
 
 type Profile = {
   name: string
   email: string
   github: string
+  githubConnected: boolean
   portfolio: string
   resume: string
   background: string
@@ -21,6 +22,7 @@ type AccountResponse = {
   github_repo?: string
   portfolio?: string
   resume_filename?: string
+  github_connected?: boolean
   background_filename?: string
   cover_letter_filename?: string
 }
@@ -31,10 +33,11 @@ type GenerationResult = {
 }
 
 const defaultProfile: Profile = {
-  name: '', email: '', github: '', portfolio: '', resume: '', background: '', coverLetter: '',
+  name: '', email: '', github: '', githubConnected: false, portfolio: '', resume: '', background: '', coverLetter: '',
 }
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000'
+const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8002'
+const OPENAI_KEY_STORAGE = 'resume-openai-api-key'
 
 async function api(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers)
@@ -53,6 +56,7 @@ const toProfile = (account: AccountResponse): Profile => ({
   name: account.name,
   email: account.email,
   github: account.github_repo || '',
+  githubConnected: Boolean(account.github_connected),
   portfolio: account.portfolio || '',
   resume: account.resume_filename || '',
   background: account.background_filename || '',
@@ -83,7 +87,13 @@ const Sparkle = () => (
 
 const BrandLogo = ({ onClick, light = false }: { onClick: () => void; light?: boolean }) => (
   <button onClick={onClick} className="group flex w-fit items-center gap-2.5" aria-label="Go to ResuME home">
-    <span className={`grid h-9 w-9 place-items-center rounded-xl text-sm font-bold shadow-[0_8px_20px_rgba(75,92,225,0.24)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0_10px_24px_rgba(75,92,225,0.32)] ${light ? 'bg-white/20 text-white' : 'bg-[#4b5ce1] text-white'}`}>R</span>
+    <span className={`grid h-9 w-9 place-items-center rounded-xl shadow-[0_8px_20px_rgba(75,92,225,0.24)] transition group-hover:-translate-y-0.5 group-hover:shadow-[0_10px_24px_rgba(75,92,225,0.32)] ${light ? 'bg-white/20 text-white' : 'bg-[#4b5ce1] text-white'}`}>
+      <svg aria-hidden="true" viewBox="0 0 32 32" className="h-6 w-6" fill="none">
+        <path d="M9 5.5h9.2L24 11.3v14.2a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-19a1 1 0 0 1 1-1Z" fill="currentColor" fillOpacity=".16" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+        <path d="M18 5.5v6h6M12 16h8M12 20h5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+        <path d="m20.8 20.3 1.3 1.3 2.9-3" stroke="#cdd3ff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
     <span className={`text-[19px] font-bold tracking-[-0.04em] ${light ? 'text-white' : 'text-[#171a2c]'}`}>Resu<span className={light ? 'text-[#cdd3ff]' : 'text-[#4b5ce1]'}>ME</span></span>
   </button>
 )
@@ -127,7 +137,8 @@ function Sidebar({ page, onPageChange, onSignOut, profile }: { page: AppPage; on
     <div className="flex items-center justify-between lg:block"><BrandLogo onClick={() => onPageChange('dashboard')} /><button onClick={onSignOut} className="rounded-lg p-2 text-[#8d91a3] hover:bg-[#f3f4fb] lg:hidden" aria-label="Sign out">↗</button></div>
     <nav className="mt-7 flex gap-2 overflow-x-auto lg:mt-12 lg:block lg:space-y-2">
       <button onClick={() => onPageChange('dashboard')} className={`flex min-w-fit items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold transition lg:w-full ${page === 'dashboard' ? 'bg-[#e9ebff] text-[#4b5ce1]' : 'text-[#777b8d] hover:bg-[#f6f7fc]'}`}><HomeIcon />Dashboard</button>
-      <button onClick={() => onPageChange('settings')} className={`flex min-w-fit items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold transition lg:w-full ${page === 'settings' ? 'bg-[#e9ebff] text-[#4b5ce1]' : 'text-[#777b8d] hover:bg-[#f6f7fc]'}`}><SettingsIcon />Account Settings</button>
+      <button onClick={() => onPageChange('provider')} className={`flex min-w-fit items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold transition lg:w-full ${page === 'provider' ? 'bg-[#e9ebff] text-[#4b5ce1]' : 'text-[#777b8d] hover:bg-[#f6f7fc]'}`}><Sparkle />AI provider</button>
+      <button onClick={() => onPageChange('settings')} className={`flex min-w-fit items-center gap-3 rounded-xl px-3.5 py-3 text-sm font-semibold transition lg:w-full ${page === 'settings' ? 'bg-[#e9ebff] text-[#4b5ce1]' : 'text-[#777b8d] hover:bg-[#f6f7fc]'}`}><SettingsIcon />Profile & documents</button>
     </nav>
     <div className="mt-auto hidden border-t border-[#eceef5] pt-5 lg:block"><div className="flex items-center gap-3"><span className="grid h-10 w-10 place-items-center rounded-full bg-[#e9dcfb] text-sm font-bold text-[#8755bf]">{(profile.name || 'A').charAt(0).toUpperCase()}</span><div className="min-w-0"><p className="truncate text-sm font-bold text-[#2d3146]">{profile.name || 'Your account'}</p><p className="truncate text-xs text-[#9296a7]">{profile.email}</p></div></div><button onClick={onSignOut} className="mt-5 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-xs font-semibold text-[#9296a7] hover:bg-[#f6f7fc] hover:text-[#4b5ce1]">Sign out <span className="ml-auto">↗</span></button></div>
   </aside>
@@ -138,20 +149,22 @@ function Toast({ message, onDismiss }: { message: string; onDismiss: () => void 
   return <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl bg-[#20243b] px-4 py-3 text-sm font-semibold text-white shadow-[0_14px_35px_rgba(32,36,59,0.24)]"><span className="grid h-6 w-6 place-items-center rounded-full bg-[#39a779]"><CheckIcon /></span>{message}</div>
 }
 
-function Dashboard({ profile }: { profile: Profile }) {
-  const [inputMode, setInputMode] = useState<JobInputMode>('url')
+function Dashboard({ profile, onConfigure }: { profile: Profile; onConfigure: () => void }) {
+  const [inputMode, setInputMode] = useState<JobInputMode>('description')
   const [jobValue, setJobValue] = useState('')
   const [submitted, setSubmitted] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [result, setResult] = useState<GenerationResult | null>(null)
   const [error, setError] = useState('')
 
-  const submitJob = (event: React.FormEvent) => { event.preventDefault(); if (!jobValue.trim()) return; setSubmitted(true); setResult(null); setError('') }
+  const submitJob = async (event: React.FormEvent) => { event.preventDefault(); if (!jobValue.trim()) return; setSubmitted(true); setResult(null); setError(''); await generateResume() }
   const generateResume = async () => {
+    const openaiApiKey = localStorage.getItem(OPENAI_KEY_STORAGE) || ''
+    if (!openaiApiKey) { onConfigure(); return }
     setGenerating(true); setError('')
     try {
       const payload = inputMode === 'url' ? { job_url: jobValue } : { job_description: jobValue }
-      setResult(await api('/resume-generations', { method: 'POST', body: JSON.stringify(payload) }))
+      setResult(await api('/resume-generations', { method: 'POST', body: JSON.stringify({ ...payload, openai_api_key: openaiApiKey }) }))
     } catch (reason) { setError(reason instanceof Error ? reason.message : 'Resume generation failed') } finally { setGenerating(false) }
   }
   const downloadResume = async () => {
@@ -166,24 +179,25 @@ function Dashboard({ profile }: { profile: Profile }) {
   const profileReady = Boolean(profile.resume || profile.background || profile.coverLetter || profile.github || profile.portfolio)
 
   return <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="text-sm font-semibold text-[#85899c]">Good morning, {profile.name.split(' ')[0] || 'there'}</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b] sm:text-4xl">Tailor your resume</h1><p className="mt-3 max-w-xl text-sm leading-6 text-[#777b8d]">Start with a job posting and we’ll prepare your resume for the opportunity ahead.</p></div><span className={`hidden rounded-full px-3 py-2 text-xs font-bold sm:inline-flex ${profileReady ? 'bg-[#e9f8f1] text-[#299567]' : 'bg-[#fff0e7] text-[#b66b3d]'}`}>{profileReady ? 'Your profile is ready' : 'Add profile evidence first'}</span></div>
-    <section className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="flex items-start gap-4"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><FileIcon /></span><div><h2 className="text-lg font-bold text-[#282c43]">Add a job posting</h2><p className="mt-1 text-sm text-[#85899c]">Choose one way to share the role you’re applying for.</p></div></div><div className="mt-7 inline-flex rounded-xl bg-[#f1f2fb] p-1"><button onClick={() => { setInputMode('url'); setSubmitted(false) }} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${inputMode === 'url' ? 'bg-white text-[#4b5ce1] shadow-sm' : 'text-[#85899c]'}`}>Job posting URL</button><button onClick={() => { setInputMode('description'); setSubmitted(false) }} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${inputMode === 'description' ? 'bg-white text-[#4b5ce1] shadow-sm' : 'text-[#85899c]'}`}>Paste description</button></div><form onSubmit={submitJob} className="mt-5"><label className="text-xs font-bold text-[#575b70]">{inputMode === 'url' ? 'Job posting URL' : 'Job description'}<textarea value={jobValue} onChange={event => setJobValue(event.target.value)} rows={inputMode === 'url' ? 3 : 8} placeholder={inputMode === 'url' ? 'https://company.com/careers/job-title' : 'Paste the job description here...'} className="mt-2 w-full resize-none rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><div className="mt-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center"><p className="text-xs text-[#9296a7]">Your job details stay private to your account.</p><button disabled={!jobValue.trim()} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:cursor-not-allowed disabled:opacity-50">Save job details <span className="ml-1">→</span></button></div></form></section>
+    <section className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="flex items-start gap-4"><span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><FileIcon /></span><div><h2 className="text-lg font-bold text-[#282c43]">Add a job posting</h2><p className="mt-1 text-sm text-[#85899c]">Choose one way to share the role you’re applying for.</p></div></div><div className="mt-7 inline-flex rounded-xl bg-[#f1f2fb] p-1"><button onClick={() => { setInputMode('description'); setSubmitted(false) }} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${inputMode === 'description' ? 'bg-white text-[#4b5ce1] shadow-sm' : 'text-[#85899c]'}`}>Paste description</button><button onClick={() => { setInputMode('url'); setSubmitted(false) }} className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${inputMode === 'url' ? 'bg-white text-[#4b5ce1] shadow-sm' : 'text-[#85899c]'}`}>Job posting URL</button></div><form onSubmit={submitJob} className="mt-5"><label className="text-xs font-bold text-[#575b70]">{inputMode === 'url' ? 'Job posting URL' : 'Job description'}<textarea value={jobValue} onChange={event => setJobValue(event.target.value)} rows={inputMode === 'url' ? 3 : 8} placeholder={inputMode === 'url' ? 'https://company.com/careers/job-title' : 'Paste the job description here...'} className="mt-2 w-full resize-none rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm leading-6 outline-none transition placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><div className="mt-5 flex flex-col items-start justify-between gap-4 sm:flex-row sm:items-center"><p className="text-xs text-[#9296a7]">Your job details stay private to your account.</p><button disabled={!jobValue.trim()} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:cursor-not-allowed disabled:opacity-50">Create my tailored resume <span className="ml-1">→</span></button></div></form></section>
     {submitted && <section className="mt-5 rounded-2xl border border-[#d9e9e2] bg-[#f5fcf8] p-5 sm:p-6"><div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div className="flex items-start gap-3"><span className="mt-0.5 grid h-8 w-8 place-items-center rounded-full bg-[#39a779] text-white"><CheckIcon /></span><div><p className="font-bold text-[#286a4e]">Job details saved</p><p className="mt-1 text-sm text-[#5f8976]">Your posting is ready for resume generation.</p></div></div><button onClick={generateResume} disabled={generating || !!result} className="rounded-xl bg-[#286a4e] px-5 py-3 text-sm font-semibold text-white transition hover:bg-[#205a42] disabled:cursor-not-allowed disabled:opacity-70">{generating ? 'Creating your tailored resume…' : result ? 'Resume created' : 'Create my tailored resume'} {result && <span className="ml-1">✓</span>}</button></div>{generating && <div className="mt-5 h-2 overflow-hidden rounded-full bg-[#d9eee3]"><div className="h-full w-1/2 animate-pulse rounded-full bg-[#39a779]" /></div>}{error && <p className="mt-4 text-sm font-semibold text-red-600">{error}</p>}{result && <div className="mt-5 flex items-center justify-between gap-4 rounded-xl border border-[#d9e9e2] bg-white px-4 py-3 text-sm font-semibold text-[#286a4e]"><span>Your tailored resume is ready — {result.compatibility_score}% match.</span><button onClick={downloadResume} className="rounded-lg bg-[#286a4e] px-4 py-2 text-white">Download DOCX</button></div>}</section>}
     {!submitted && <div className="mt-7 rounded-2xl border border-dashed border-[#dfe2ee] bg-white/60 p-7 text-center"><div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-[#f1e9fb] text-[#8c5ac4]"><Sparkle /></div><h3 className="mt-4 font-bold text-[#383c52]">No applications yet</h3><p className="mx-auto mt-2 max-w-sm text-sm leading-6 text-[#85899c]">Add your first job posting above to start building a resume tailored to the role.</p></div>}
   </main>
 }
 
-function FileDropzone({ label, value, onChange }: { label: string; value: string; onChange: (file: File) => void }) {
+function FileDropzone({ label, value, onChange, onRemove }: { label: string; value: string; onChange: (file: File) => void; onRemove?: () => void }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const acceptFile = (file?: File) => { if (file) onChange(file) }
-  return <div><p className="mb-2 text-xs font-bold text-[#575b70]">{label}</p><input ref={inputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={event => acceptFile(event.target.files?.[0])} />{value ? <div className="flex items-center justify-between rounded-xl border border-[#d9e9e2] bg-[#f5fcf8] px-4 py-3"><div className="flex min-w-0 items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-[#39a779]"><FileIcon /></span><span className="truncate text-sm font-semibold text-[#286a4e]">{value}</span></div><button type="button" onClick={() => inputRef.current?.click()} className="text-xs font-bold text-[#7d9c8d] hover:text-[#286a4e]">Replace</button></div> : <button type="button" onClick={() => inputRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); acceptFile(event.dataTransfer.files[0]) }} className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-[#cfd3e2] bg-[#fafbfe] px-5 py-7 text-center transition hover:border-[#4b5ce1] hover:bg-[#f7f8ff]"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><UploadIcon /></span><span className="mt-3 text-sm font-bold text-[#4b5ce1]">Drop a file here or browse</span><span className="mt-1 text-xs text-[#9296a7]">PDF or DOCX, up to 5 MB</span></button>}</div>
+  return <div><p className="mb-2 text-xs font-bold text-[#575b70]">{label}</p><input ref={inputRef} type="file" accept=".pdf,.docx" className="hidden" onChange={event => acceptFile(event.target.files?.[0])} />{value ? <div className="flex items-center justify-between rounded-xl border border-[#d9e9e2] bg-[#f5fcf8] px-4 py-3"><div className="flex min-w-0 items-center gap-3"><span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white text-[#39a779]"><FileIcon /></span><span className="truncate text-sm font-semibold text-[#286a4e]">{value}</span></div><div className="flex items-center gap-3"><button type="button" onClick={() => inputRef.current?.click()} className="text-xs font-bold text-[#7d9c8d] hover:text-[#286a4e]">Replace</button>{onRemove && <button type="button" onClick={onRemove} className="text-xs font-bold text-[#b14d4d] hover:text-[#923b3b]">Remove</button>}</div></div> : <button type="button" onClick={() => inputRef.current?.click()} onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); acceptFile(event.dataTransfer.files[0]) }} className="flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-[#cfd3e2] bg-[#fafbfe] px-5 py-7 text-center transition hover:border-[#4b5ce1] hover:bg-[#f7f8ff]"><span className="grid h-10 w-10 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><UploadIcon /></span><span className="mt-3 text-sm font-bold text-[#4b5ce1]">Drop a file here or browse</span><span className="mt-1 text-xs text-[#9296a7]">PDF or DOCX, up to 5 MB</span></button>}</div>
 }
 
-function SettingsPage({ profile, onSave }: { profile: Profile; onSave: (profile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => Promise<Profile> }) {
+function SettingsPage({ profile, onSave, onConnect, onDisconnect, onRemoveDocument }: { profile: Profile; onSave: (profile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => Promise<Profile>; onConnect: () => Promise<void>; onDisconnect: () => Promise<void>; onRemoveDocument: (kind: 'resume' | 'background' | 'coverLetter') => Promise<void> }) {
   const [draft, setDraft] = useState(profile)
   const [files, setFiles] = useState<Partial<Record<'resume' | 'background' | 'coverLetter', File>>>({})
   const [toast, setToast] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [disconnecting, setDisconnecting] = useState(false)
   useEffect(() => setDraft(profile), [profile])
   const update = (key: keyof Profile, value: string) => setDraft(current => ({ ...current, [key]: value }))
   const selectFile = (key: 'resume' | 'background' | 'coverLetter', file: File) => { setFiles(current => ({ ...current, [key]: file })); update(key, file.name) }
@@ -191,14 +205,45 @@ function SettingsPage({ profile, onSave }: { profile: Profile; onSave: (profile:
     event.preventDefault(); setSaving(true); setError('')
     try { setDraft(await onSave(draft, files)); setFiles({}); setToast('Account settings saved') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not save settings') } finally { setSaving(false) }
   }
-  return <main className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div><p className="text-sm font-semibold text-[#85899c]">Your account</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b]">Account Settings</h1><p className="mt-3 text-sm leading-6 text-[#777b8d]">Keep your profile and career documents ready for every application.</p></div><form onSubmit={save} className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="grid gap-5 sm:grid-cols-2"><label className="text-xs font-bold text-[#575b70]">Name<input required value={draft.name} onChange={event => update('name', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Email address<input required type="email" value={draft.email} onChange={event => update('email', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">GitHub repository<input value={draft.github} onChange={event => update('github', event.target.value)} placeholder="https://github.com/you/project" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Portfolio<input value={draft.portfolio} onChange={event => update('portfolio', event.target.value)} placeholder="https://yourportfolio.com" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label></div><div className="my-8 border-t border-[#eceef5]" /><div><h2 className="text-base font-bold text-[#282c43]">Career documents</h2><p className="mt-1 text-sm text-[#85899c]">Upload the latest materials you want ResuME to use.</p></div><div className="mt-6 space-y-5"><FileDropzone label="Recent resume" value={draft.resume} onChange={file => selectFile('resume', file)} /><FileDropzone label="Background document" value={draft.background} onChange={file => selectFile('background', file)} /><FileDropzone label="Cover letter (optional)" value={draft.coverLetter} onChange={file => selectFile('coverLetter', file)} /></div>{error && <p className="mt-5 text-sm font-semibold text-red-600">{error}</p>}<div className="mt-8 flex justify-end border-t border-[#eceef5] pt-6"><button disabled={saving} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:opacity-60">{saving ? 'Saving…' : 'Save changes'}</button></div></form>{toast && <Toast message={toast} onDismiss={() => setToast('')} />}</main>
+  return <main className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div><p className="text-sm font-semibold text-[#85899c]">Your profile</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b]">Profile & documents</h1><p className="mt-3 text-sm leading-6 text-[#777b8d]">Keep your profile and career documents ready for every application.</p></div><form onSubmit={save} className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><div className="grid gap-5 sm:grid-cols-2"><label className="text-xs font-bold text-[#575b70]">Name<input required value={draft.name} onChange={event => update('name', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">Email address<input required type="email" value={draft.email} onChange={event => update('email', event.target.value)} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label><label className="text-xs font-bold text-[#575b70]">GitHub repository<input value={draft.github} onChange={event => update('github', event.target.value)} placeholder="https://github.com/you/project" disabled={profile.githubConnected} className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" />{profile.githubConnected ? <div className="mt-2 flex items-center gap-3"><span className="rounded-lg bg-[#e9f8f1] px-3 py-2 text-xs font-semibold text-[#286a4e]">GitHub connected</span><button type="button" onClick={async () => { setDisconnecting(true); setError(''); try { await onDisconnect(); setToast('GitHub disconnected') } catch (reason) { setError(reason instanceof Error ? reason.message : 'Could not disconnect GitHub') } finally { setDisconnecting(false) } }} disabled={disconnecting} className="text-xs font-semibold text-[#b14d4d] hover:text-[#923b3b] disabled:opacity-60">{disconnecting ? 'Disconnecting…' : 'Disconnect'}</button></div> : <button type="button" onClick={onConnect} className="mt-2 rounded-lg bg-[#202124] px-3 py-2 text-xs font-semibold text-white">Connect GitHub</button>}</label><label className="text-xs font-bold text-[#575b70]">Portfolio<input value={draft.portfolio} onChange={event => update('portfolio', event.target.value)} placeholder="https://yourportfolio.com" className="mt-2 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none placeholder:text-[#b2b5c2] focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /></label></div><div className="my-8 border-t border-[#eceef5]" /><div><h2 className="text-base font-bold text-[#282c43]">Career documents</h2><p className="mt-1 text-sm text-[#85899c]">Upload the latest materials you want ResuME to use.</p></div><div className="mt-6 space-y-5"><FileDropzone label="Recent resume" value={draft.resume} onChange={file => selectFile('resume', file)} onRemove={() => onRemoveDocument('resume')} /><FileDropzone label="Background document" value={draft.background} onChange={file => selectFile('background', file)} onRemove={() => onRemoveDocument('background')} /><FileDropzone label="Cover letter (optional)" value={draft.coverLetter} onChange={file => selectFile('coverLetter', file)} onRemove={() => onRemoveDocument('coverLetter')} /></div>{error && <p className="mt-5 text-sm font-semibold text-red-600">{error}</p>}<div className="mt-8 flex justify-end border-t border-[#eceef5] pt-6"><button disabled={saving} className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4] disabled:opacity-60">{saving ? 'Saving…' : 'Save changes'}</button></div></form>{toast && <Toast message={toast} onDismiss={() => setToast('')} />}</main>
+}
+
+function ProviderPage() {
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(OPENAI_KEY_STORAGE) || '')
+  const [toast, setToast] = useState('')
+
+  const save = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (apiKey.trim()) localStorage.setItem(OPENAI_KEY_STORAGE, apiKey.trim())
+    else localStorage.removeItem(OPENAI_KEY_STORAGE)
+    setToast('AI provider saved')
+  }
+
+  return <main className="mx-auto w-full max-w-4xl px-5 py-8 sm:px-8 lg:px-12 lg:py-12"><div><p className="text-sm font-semibold text-[#85899c]">Core setup</p><h1 className="mt-2 text-3xl font-bold tracking-[-0.06em] text-[#20243b]">AI provider</h1><p className="mt-3 max-w-xl text-sm leading-6 text-[#777b8d]">Connect the AI provider ResuME uses to tailor your resumes. This is separate from your career documents and profile.</p></div><form onSubmit={save} className="mt-9 rounded-2xl border border-[#e4e6f0] bg-white p-5 shadow-[0_18px_50px_rgba(65,75,140,0.06)] sm:p-8"><h2 className="text-base font-bold text-[#282c43]">OpenAI</h2><p className="mt-1 text-sm text-[#85899c]">Your API key stays in this browser and is sent only during generation.</p><div className="mt-5 flex gap-2"><button type="button" className="rounded-lg bg-[#e9ebff] px-3 py-2 text-xs font-bold text-[#4b5ce1]">API key</button><button type="button" disabled className="rounded-lg border border-[#e1e3ed] px-3 py-2 text-xs font-bold text-[#9a9db0]">Codex Login (coming soon)</button></div><input type="password" value={apiKey} onChange={event => setApiKey(event.target.value)} placeholder="sk-..." className="mt-3 w-full rounded-xl border border-[#e1e3ed] px-4 py-3 text-sm outline-none focus:border-[#4b5ce1] focus:ring-4 focus:ring-[#4b5ce1]/10" /><div className="mt-8 flex justify-end border-t border-[#eceef5] pt-6"><button className="rounded-xl bg-[#4b5ce1] px-5 py-3 text-sm font-semibold text-white shadow-[0_9px_20px_rgba(75,92,225,0.18)] transition hover:bg-[#3f50d4]">Save provider</button></div></form>{toast && <Toast message={toast} onDismiss={() => setToast('')} />}</main>
 }
 
 function AuthenticatedApp({ onSignOut }: { onSignOut: () => void }) {
-  const [page, setPage] = useState<AppPage>('dashboard')
+  const githubCallback = new URLSearchParams(window.location.search).get('github') === 'connected'
+  const [page, setPage] = useState<AppPage>(() => githubCallback ? 'settings' : localStorage.getItem(OPENAI_KEY_STORAGE) ? 'dashboard' : 'provider')
+  const [showProviderPrompt, setShowProviderPrompt] = useState(() => !githubCallback && !localStorage.getItem(OPENAI_KEY_STORAGE))
   const [profile, setProfile] = useState<Profile>(defaultProfile)
   const [loading, setLoading] = useState(true)
-  useEffect(() => { api('/account').then(account => setProfile(toProfile(account))).catch(onSignOut).finally(() => setLoading(false)) }, [onSignOut])
+  useEffect(() => {
+    api('/account').then(account => setProfile(toProfile(account))).catch(onSignOut).finally(() => setLoading(false))
+    if (githubCallback) window.history.replaceState({}, '', window.location.pathname)
+  }, [onSignOut, githubCallback])
+  const connectGithub = async () => {
+    const response = await api('/auth/github/start')
+    window.location.href = response.url
+  }
+  const disconnectGithub = async () => {
+    await api('/auth/github/disconnect', { method: 'POST' })
+    setProfile(toProfile(await api('/account')))
+  }
+  const removeDocument = async (kind: 'resume' | 'background' | 'coverLetter') => {
+    const account = await api(`/account/documents/${kind === 'coverLetter' ? 'cover_letter' : kind}`, { method: 'DELETE' })
+    setProfile(toProfile(account || await api('/account')))
+  }
   const saveProfile = async (nextProfile: Profile, files: Partial<Record<'resume' | 'background' | 'coverLetter', File>>) => {
     let account: AccountResponse = await api('/account', { method: 'PATCH', body: JSON.stringify({ name: nextProfile.name, email: nextProfile.email, github_repo: nextProfile.github || null, portfolio: nextProfile.portfolio || null }) })
     for (const [key, file] of Object.entries(files)) {
@@ -210,7 +255,7 @@ function AuthenticatedApp({ onSignOut }: { onSignOut: () => void }) {
     const saved = toProfile(account); setProfile(saved); return saved
   }
   if (loading) return <main className="grid min-h-screen place-items-center bg-[#f7f8fc] text-sm font-semibold text-[#777b8d]">Loading your profile…</main>
-  return <div className="min-h-screen bg-[#f7f8fc] text-[#171a2c] lg:flex"><Sidebar page={page} onPageChange={setPage} onSignOut={onSignOut} profile={profile} /><div className="min-w-0 flex-1">{page === 'dashboard' ? <Dashboard profile={profile} /> : <SettingsPage profile={profile} onSave={saveProfile} />}</div></div>
+  return <div className="min-h-screen bg-[#f7f8fc] text-[#171a2c] lg:flex"><Sidebar page={page} onPageChange={setPage} onSignOut={onSignOut} profile={profile} /><div className="min-w-0 flex-1 page-transition" key={page}>{page === 'dashboard' ? <Dashboard profile={profile} onConfigure={() => setPage('provider')} /> : page === 'provider' ? <ProviderPage /> : <SettingsPage profile={profile} onSave={saveProfile} onConnect={connectGithub} onDisconnect={disconnectGithub} onRemoveDocument={removeDocument} />}</div>{showProviderPrompt && <div className="provider-prompt fixed inset-0 z-50 grid place-items-center bg-[#20243b]/30 px-5 backdrop-blur-sm"><div role="dialog" aria-modal="true" aria-labelledby="provider-prompt-title" className="w-full max-w-md rounded-2xl bg-white p-7 shadow-[0_24px_70px_rgba(32,36,59,0.22)]"><div className="grid h-11 w-11 place-items-center rounded-xl bg-[#e9ebff] text-[#4b5ce1]"><Sparkle /></div><h2 id="provider-prompt-title" className="mt-5 text-xl font-bold text-[#282c43]">Set up your AI provider</h2><p className="mt-2 text-sm leading-6 text-[#777b8d]">Add your OpenAI API key before creating a tailored resume. It stays in this browser and is only used during generation.</p><button onClick={() => { setShowProviderPrompt(false); setPage('provider') }} className="mt-6 w-full rounded-xl bg-[#4b5ce1] py-3 text-sm font-semibold text-white transition hover:bg-[#3f50d4]">Go to AI provider <span className="ml-1">→</span></button></div></div>}</div>
 }
 
 function App() {
