@@ -497,6 +497,26 @@ async def upload_document(
     return account_data(user)
 
 
+@app.delete("/account/documents/{kind}", status_code=204)
+def delete_document(
+    kind: str,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    if kind not in ALLOWED_DOCUMENTS:
+        raise HTTPException(status_code=404, detail="Unknown document type")
+    if kind == "resume":
+        if user.resume_filename:
+            (UPLOAD_DIR / user.resume_filename).unlink(missing_ok=True)
+        user.resume_filename = None
+    else:
+        path = career_document(user.id, kind)
+        if path:
+            path.unlink(missing_ok=True)
+        setattr(user, kind, None)
+    session.commit()
+
+
 @app.post("/account/resume")
 async def upload_resume(
     resume: UploadFile = File(...),
